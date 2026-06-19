@@ -457,6 +457,7 @@ function preloadInitialFrames(callback) {
 
 // Preload remaining hero frames progressively in the background in batches of 4
 function preloadRemainingHeroFrames() {
+  if (window.innerWidth < 768) return; // Skip background preload on mobile to save memory
   let currentIndex = 15;
   const batchSize = 4;
   const delay = 60;
@@ -500,6 +501,7 @@ function triggerLightingPreload() {
 
 // Preload lighting frames progressively in the background in batches of 4
 function preloadLightingFramesProgressive() {
+  if (window.innerWidth < 768) return; // Skip background preload on mobile to save memory
   let currentIndex = 0;
   const batchSize = 4;
   const delay = 60;
@@ -534,6 +536,53 @@ function preloadLightingFramesProgressive() {
   }
 }
 
+// Sliding frame buffer manager to keep memory footprint tiny on mobile
+function ensureFramesLoaded(sequence, currentIndex) {
+  const total = sequence === 'hero' ? seq1Total : seq2Total;
+  const cache = sequence === 'hero' ? seq1Images : seq2Images;
+  const mobile = window.innerWidth < 768;
+
+  if (mobile) {
+    // Tighter buffer on mobile: keep 4 behind, 8 ahead (total 13 frames)
+    const keepBehind = 4;
+    const keepAhead = 8;
+    const minIdx = Math.max(0, currentIndex - keepBehind);
+    const maxIdx = Math.min(total - 1, currentIndex + keepAhead);
+
+    // Unload frames outside buffer
+    for (let i = 0; i < total; i++) {
+      if (i < minIdx || i > maxIdx) {
+        if (cache[i]) {
+          cache[i].src = '';
+          cache[i] = null;
+        }
+      }
+    }
+
+    // Load frames inside buffer
+    for (let i = minIdx; i <= maxIdx; i++) {
+      if (!cache[i]) {
+        const src = sequence === 'hero'
+          ? `assets/frames/hero/frame_${String(i + 1).padStart(4, '0')}.webp`
+          : `assets/frames/lighting/frame_${String(i + 1).padStart(4, '0')}.webp`;
+        loadFrame(sequence, i, src);
+      }
+    }
+  } else {
+    // Desktop: ensure current frame and 15 frames ahead are loaded
+    const keepAhead = 15;
+    const maxIdx = Math.min(total - 1, currentIndex + keepAhead);
+    for (let i = currentIndex; i <= maxIdx; i++) {
+      if (!cache[i]) {
+        const src = sequence === 'hero'
+          ? `assets/frames/hero/frame_${String(i + 1).padStart(4, '0')}.webp`
+          : `assets/frames/lighting/frame_${String(i + 1).padStart(4, '0')}.webp`;
+        loadFrame(sequence, i, src);
+      }
+    }
+  }
+}
+
 // Fetch helper with fallback to avoid blank spots
 function getHeroFrame(index) {
   if (seq1Images[index] && seq1Images[index].complete) {
@@ -563,20 +612,20 @@ function getContactFrame(index) {
   return getHeroFrame(seq1Total - 1);
 }
 
-// Height-scale drawing function to preserve camera scale (no wide zooming)
+// Cover drawing function to preserve camera scale (aspect cover behavior)
 function drawBackground(ctx, img, canvasWidth, canvasHeight) {
   const imgWidth = img.width;
   const imgHeight = img.height;
   
-  // Scale based strictly on viewport height to preserve visual proportions
-  const scale = canvasHeight / imgHeight;
+  // Scale factor to cover the entire canvas width and height (aspect ratio preserved)
+  const scale = Math.max(canvasWidth / imgWidth, canvasHeight / imgHeight);
   
   const drawnWidth = imgWidth * scale;
-  const drawnHeight = canvasHeight;
+  const drawnHeight = imgHeight * scale;
   
-  // Center horizontally
+  // Center horizontally and vertically
   const x = (canvasWidth - drawnWidth) / 2;
-  const y = 0;
+  const y = (canvasHeight - drawnHeight) / 2;
   
   ctx.drawImage(img, 0, 0, imgWidth, imgHeight, x, y, drawnWidth, drawnHeight);
 }
@@ -593,13 +642,16 @@ function drawScene() {
 
   if (activeSequence === 'hero') {
     const frameIndex = Math.min(seq1Total - 1, Math.max(0, Math.round(heroProgress * (seq1Total - 1))));
+    ensureFramesLoaded('hero', frameIndex);
     imgToDraw = getHeroFrame(frameIndex);
     currentKey = `hero_${frameIndex}`;
   } else if (activeSequence === 'lighting') {
     const frameIndex = Math.min(seq2Total - 1, Math.max(0, Math.round(contactProgress * (seq2Total - 1))));
+    ensureFramesLoaded('lighting', frameIndex);
     imgToDraw = getContactFrame(frameIndex);
     currentKey = `lighting_${frameIndex}`;
   } else {
+    ensureFramesLoaded('hero', seq1Total - 1);
     imgToDraw = getHeroFrame(seq1Total - 1);
     currentKey = `static`;
   }
@@ -645,6 +697,11 @@ function resizeCanvas() {
   
   canvas.width = w;
   canvas.height = h;
+  
+  // Lock elements style width and height to prevent mobile stretch jumps
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  
   lastRenderedKey = ''; 
   requestRedraw();
 }
