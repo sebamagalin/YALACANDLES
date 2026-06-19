@@ -123,6 +123,10 @@ a {
   z-index: -1;
   object-fit: cover;
   pointer-events: none;
+  /* Performance optimization: promote to GPU layer to prevent layout repaints */
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
 }
 
 /* --- Custom Cursor --- */
@@ -1780,10 +1784,25 @@ footer {
   }
   
   .bag-btn {
-    padding: 8px;
+    position: relative;
+    padding: 0;
     border-radius: 50%;
     width: 36px;
     height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .bag-btn .bag-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 16px;
+    height: 16px;
+    font-size: 8px;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
   }
   

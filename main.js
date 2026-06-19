@@ -414,49 +414,123 @@ let heroProgress = 0;
 let contactProgress = 0;
 let canvasReady = false;
 
+// Frame Cache Helper to prevent duplicate instantiations/requests
+function loadFrame(sequence, index, src, callback) {
+  const cache = sequence === 'hero' ? seq1Images : seq2Images;
+  if (cache[index]) {
+    if (callback) {
+      if (cache[index].complete) {
+        callback(cache[index]);
+      } else {
+        cache[index].addEventListener('load', () => callback(cache[index]), { once: true });
+        cache[index].addEventListener('error', () => callback(cache[index]), { once: true });
+      }
+    }
+    return cache[index];
+  }
+
+  const img = new Image();
+  cache[index] = img;
+  if (callback) {
+    img.addEventListener('load', () => callback(img), { once: true });
+    img.addEventListener('error', () => callback(img), { once: true });
+  }
+  img.src = src;
+  return img;
+}
+
 // Preload first 15 frames of sequence 1 for immediate render
 function preloadInitialFrames(callback) {
   let loaded = 0;
   const target = Math.min(15, seq1Total);
   for (let i = 1; i <= target; i++) {
-    const img = new Image();
-    img.src = `assets/frames/hero/frame_${String(i).padStart(4, '0')}.webp`;
-    img.onload = () => {
-      loaded++;
-      seq1Images[i - 1] = img;
-      if (loaded === target) {
-        callback();
-        preloadRemainingFrames();
-      }
-    };
-    img.onerror = () => {
+    const src = `assets/frames/hero/frame_${String(i).padStart(4, '0')}.webp`;
+    loadFrame('hero', i - 1, src, () => {
       loaded++;
       if (loaded === target) {
         callback();
-        preloadRemainingFrames();
+        preloadRemainingHeroFrames();
       }
-    };
+    });
   }
 }
 
-// Background load the rest to fulfill performance budget
-function preloadRemainingFrames() {
-  // Sequence 1 remainder
-  for (let i = 16; i <= seq1Total; i++) {
-    const img = new Image();
-    img.src = `assets/frames/hero/frame_${String(i).padStart(4, '0')}.webp`;
-    img.onload = () => {
-      seq1Images[i - 1] = img;
-    };
+// Preload remaining hero frames progressively in the background in batches of 4
+function preloadRemainingHeroFrames() {
+  let currentIndex = 15;
+  const batchSize = 4;
+  const delay = 60;
+
+  function loadNextBatch() {
+    if (currentIndex >= seq1Total) return;
+    let loadedCount = 0;
+    const limit = Math.min(currentIndex + batchSize, seq1Total);
+    const countToLoad = limit - currentIndex;
+
+    for (let i = currentIndex; i < limit; i++) {
+      const idx = i;
+      const src = `assets/frames/hero/frame_${String(idx + 1).padStart(4, '0')}.webp`;
+      loadFrame('hero', idx, src, () => {
+        loadedCount++;
+        if (loadedCount === countToLoad) {
+          currentIndex = limit;
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(() => setTimeout(loadNextBatch, delay));
+          } else {
+            setTimeout(loadNextBatch, delay);
+          }
+        }
+      });
+    }
   }
 
-  // Sequence 2 (lighting)
-  for (let i = 1; i <= seq2Total; i++) {
-    const img = new Image();
-    img.src = `assets/frames/lighting/frame_${String(i).padStart(4, '0')}.webp`;
-    img.onload = () => {
-      seq2Images[i - 1] = img;
-    };
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(() => loadNextBatch());
+  } else {
+    loadNextBatch();
+  }
+}
+
+let lightingPreloadStarted = false;
+function triggerLightingPreload() {
+  if (lightingPreloadStarted) return;
+  lightingPreloadStarted = true;
+  preloadLightingFramesProgressive();
+}
+
+// Preload lighting frames progressively in the background in batches of 4
+function preloadLightingFramesProgressive() {
+  let currentIndex = 0;
+  const batchSize = 4;
+  const delay = 60;
+
+  function loadNextBatch() {
+    if (currentIndex >= seq2Total) return;
+    let loadedCount = 0;
+    const limit = Math.min(currentIndex + batchSize, seq2Total);
+    const countToLoad = limit - currentIndex;
+
+    for (let i = currentIndex; i < limit; i++) {
+      const idx = i;
+      const src = `assets/frames/lighting/frame_${String(idx + 1).padStart(4, '0')}.webp`;
+      loadFrame('lighting', idx, src, () => {
+        loadedCount++;
+        if (loadedCount === countToLoad) {
+          currentIndex = limit;
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(() => setTimeout(loadNextBatch, delay));
+          } else {
+            setTimeout(loadNextBatch, delay);
+          }
+        }
+      });
+    }
+  }
+
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(() => loadNextBatch());
+  } else {
+    loadNextBatch();
   }
 }
 
@@ -541,15 +615,36 @@ function drawScene() {
   }
 }
 
+let renderPending = false;
 function requestRedraw() {
-  requestAnimationFrame(drawScene);
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => {
+    drawScene();
+    renderPending = false;
+  });
 }
+
+let cachedWidth = 0;
+let cachedHeight = 0;
 
 function resizeCanvas() {
   const canvas = document.getElementById("cinematicCanvas");
   if (!canvas) return;
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  
+  // Avoid triggers on small vertical resizes (e.g. mobile address bar hiding/showing)
+  if (w === cachedWidth && Math.abs(h - cachedHeight) < 100) {
+    return;
+  }
+  
+  cachedWidth = w;
+  cachedHeight = h;
+  
+  canvas.width = w;
+  canvas.height = h;
   lastRenderedKey = ''; 
   requestRedraw();
 }
@@ -557,6 +652,16 @@ function resizeCanvas() {
 // --- 4. GSAP & ScrollTrigger Layout binds ---
 function initGSAPScroll() {
   gsap.registerPlugin(ScrollTrigger);
+
+  // Lazy-load the lighting sequence as the user approaches the FAQ section
+  ScrollTrigger.create({
+    trigger: "#faq",
+    start: "top 120%",
+    once: true,
+    onEnter: () => {
+      triggerLightingPreload();
+    }
+  });
 
   // Pin & Scrub Hero Cloche Removal (Seq 01)
   ScrollTrigger.create({
@@ -576,9 +681,10 @@ function initGSAPScroll() {
       if (self.isActive) {
         activeSequence = 'hero';
       } else if (self.progress === 1) {
-        if (activeSequence === 'hero') {
-          activeSequence = 'static';
-        }
+        activeSequence = 'static';
+      } else if (self.progress === 0) {
+        activeSequence = 'hero';
+        heroProgress = 0;
       }
       requestRedraw();
     }
@@ -1197,7 +1303,7 @@ function showToast(message) {
 }
 
 // --- 12. Initialization ---
-window.addEventListener("load", () => {
+document.addEventListener("DOMContentLoaded", () => {
   resizeCanvas();
   // Preload frames progressively
   preloadInitialFrames(() => {
